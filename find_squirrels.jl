@@ -57,51 +57,58 @@ if make_contour
     savefig("contour_100")
 end
 
-# f(x) = grid[x[1]][x[2]]
-
-
 length_scale = 1.0
 logObsNoise = log(1.0)
 m = MeanZero()
 kernel = SE(log(length_scale),0.0)
 
+# initialize our x_obs matrix
+xs = Vector{Float64}(undef, 0)
+ys = Vector{Float64}(undef, 0)
+for x in x_axis
+    for y in y_axis
+        push!(xs, x)
+        push!(ys, y)
+    end
+end
 
-# # x_obs = reshape([(x,y) for x in x_axis for y in y_axis], size(grid))
-# x_obs = [(x,y) for x in x_axis for y in y_axis]
-# x_obs = [[x,y] for x in x_axis for y in y_axis]
+vals = append!(xs, ys)
+x_obs = reshape(vals, (2,:)) 
+println("size(x_obs): ", size(x_obs))
 
-# xs = []
-# ys = []
-# for x in x_axis
-#     push!(xs, x)
-# end
-# for y in y_axis
-#     push!(ys, y)
-# end
-# x_obs = [xs,ys]
+# get our grid, squirrel count values into correct shape, call it y_obs
+y_obs = reshape(grid, (:,))
+println("size(y_obs): ", size(y_obs))
 
-# println("size(x_obs): ", size(x_obs))
-# println("x_obs: ", x_obs)
+# fit Gaussian Process
+gp = GP(x_obs, y_obs, m, kernel, logObsNoise)
 
-# grid_re = reshape(grid, (1,:))
-# println("size(grid_re): ", size(grid_re))
+# initialize our x_all matrix
+# we randomly sample x,y values within our grid
+x_rand = rand([0,x_range], length(x_axis))
+y_rand = rand([0,y_range], length(y_axis))
 
-# # fit Gaussian Process
-# gp = GP(x_obs, grid_re, m, kernel, logObsNoise)
+xs_all = Vector{Float64}(undef, 0)
+ys_all = Vector{Float64}(undef, 0)
+for x in x_rand
+    for y in y_rand
+        push!(xs_all,x)
+        push!(ys_all,y)
+    end
+end
+x_all = append!(xs_all,ys_all)
+x_all = reshape(x_all, (2,:))
+println("size(x_all): ", size(x_all))
 
-# x_rand = rand([0,x_range], length(x_axis))
-# y_rand = rand([0,y_range], length(y_axis))
+# extract predicted mean and confidence interval
+μ, σ² = predict_y(gp, x_all)
+σ = sqrt.(σ²)
+std95 = 2*σ 
 
-# x_all = reshape([(x,y) for x in x_rand for y in y_rand], size(grid))
-# y_all = f.(x_all)
-# println("size(x_all): ", size(x_all))
+println("size(μ): ", size(μ))
+println("size(σ²): ", size(σ²))
 
-# # extract predicted mean and confidence interval
-# μ, σ² = predict_y(gp, x_all)
-# σ = sqrt.(σ²)
-# std95 = 2*σ 
 
-# p1 = plot(gp)
 
 
 
