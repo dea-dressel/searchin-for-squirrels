@@ -19,6 +19,8 @@ const data_file = "nyc_squirrels.csv"
 # FLAGS FOR PRINTING AND PLOTTING
 const PLOT_CONTOUR = true
 const DEBUG = true
+const CONSTRAINT = false
+const constraint_type = "eating" #options include: "eating", "running", "climbing" 
 
 const x_index = 1
 const y_index = 2
@@ -53,7 +55,7 @@ function main()
     if PLOT_CONTOUR
         plt = contourf(x_axis, y_axis, z_grid', levels =20, c = cgrad(:viridis, rev = true), legend = true, title = "contour", xlabel = "x_bins", ylabel = "y_bins")
         display(plt)
-        savefig("contour_plots/contour_100")
+        savefig("contour_plots/contour_100_constrained=$CONSTRAINT")
     end
 
     ## GAUSSIAN PROCESS FITTING ##
@@ -185,8 +187,15 @@ function build_z_grid(data, origin_LLA, num_x_bins, num_y_bins, bin_size)
         x,y = enu[x_index]/bin_size, enu[y_index]/bin_size
         x,y = max(x,0), max(y,0) # ensure positive x,y values
         
-        # increment count of squirrels within that bin
-        z_grid[floor(Int64, x)+1, floor(Int64, y)+1] += 1
+        if CONSTRAINT
+            if row[constraint_type] #constrainted to constraint type
+                # increment count of squirrels within that bin
+                z_grid[floor(Int64, x)+1, floor(Int64, y)+1] += 1 
+            end
+        else #no constraint 
+            # increment count of squirrels within that bin
+            z_grid[floor(Int64, x)+1, floor(Int64, y)+1] += 1
+        end
     end
 
     if DEBUG
