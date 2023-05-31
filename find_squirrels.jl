@@ -12,7 +12,7 @@
 =#
 
 
-using GaussianProcesses, Plots, CSV, DataFrames, Geodesy, LinearAlgebra
+using GaussianProcesses, Plots, CSV, DataFrames, Geodesy, LinearAlgebra, Distributions
 
 const data_file = "nyc_squirrels.csv"
 
@@ -64,7 +64,7 @@ function main()
     length_scale = 1.0
     logObsNoise = log(1.0)
     m = MeanZero()
-    kernel = SE(log(length_scale),0.0)
+    kernel = SE(log(length_scale), 0.0)
 
     # initialize our observed x float64 matrix
     xy_obs = init_xy_obs(x_axis, y_axis)
@@ -82,12 +82,27 @@ function main()
     # extract predicted mean and confidence interval
     μ, σ² = predict_y(gp, xy_all)
     σ = sqrt.(σ²)
-    std95 = 2*σ 
+    std95 = 1.96*σ
 
     if DEBUG
+        println("size(xy_all): ", size(xy_all))
         println("size(μ): ", size(μ))
         println("size(σ²): ", size(σ²))
     end
+
+    # plot GP predict
+    if DEBUG
+        println(xy_all[:,100:115])
+        println(μ[100:115])
+        println(σ[100:115])
+    end
+    if PLOT_CONTOUR 
+        # TODO: fix this plotting of the predicted
+        plt = contourf(xy_all[1,:], xy_all[2,:], μ, levels =20, c = cgrad(:viridis, rev = true), legend = true, title = "contour", xlabel = "x_bins", ylabel = "y_bins")
+        display(plt)
+        savefig("contour_plots/predictedmean_$(bin_size)")
+    end
+
 
     ## IMPLEMENT EXPLORATION STRATEGY HERE ##
 
@@ -249,8 +264,8 @@ end
 """
 function init_xy_all(x_range, y_range, num_x, num_y)
     # we randomly sample num_x x values and num_y y values within our 2D z_grid
-    x_rand = rand([0,x_range], num_x)
-    y_rand = rand([0,y_range], num_y)
+    x_rand = rand(Uniform(0, x_range), num_x)
+    y_rand = rand(Uniform(0, y_range), num_y)
 
     xs_all = Vector{Float64}(undef, 0)
     ys_all = Vector{Float64}(undef, 0)
@@ -258,16 +273,16 @@ function init_xy_all(x_range, y_range, num_x, num_y)
     # make every combination of x,y pairs form rand_x and rand_y 
     for x in x_rand
         for y in y_rand
-            push!(xs_all,x)
-            push!(ys_all,y)
+            push!(xs_all, x)
+            push!(ys_all, y)
         end
     end
 
     # get into expected Vector structure for GP
-    xy_all = append!(xs_all,ys_all)
-    xy_all = reshape(xy_all, (2,:))
+    xy_all = vcat(xs_all', ys_all')
 
     if DEBUG
+        println("typeof(xy_all): ", typeof(xy_all))
         println("size(xy_all): ", size(xy_all))
     end
     return xy_all
