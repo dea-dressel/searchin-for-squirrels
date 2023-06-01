@@ -37,8 +37,9 @@ function main()
     bin_size = 100
 
     # gather x and y axis information
-    x_range = ceil(lower_right[x_index]) # 
+    x_range = ceil(lower_right[x_index])
     y_range = ceil(upper_left[y_index])
+    
 
     x_axis, y_axis = get_axes(x_range, y_range, bin_size)
 
@@ -49,40 +50,56 @@ function main()
     num_y = length(y_bins) # vector dimensions for y design points
 
     # build grid to store lat/long squirrel counts (our z value)
-    z_grid = build_z_grid(data, origin_LLA, num_x, num_y, bin_size)
+    z_grid = build_z_grid(data, origin_LLA, num_x, num_y, bin_size, x_range, y_range)
 
     # plotting
     if PLOT_CONTOUR
-        plt = contourf(x_axis, y_axis, z_grid', levels =20, c = cgrad(:viridis, rev = true), legend = true, title = "contour", xlabel = "x_bins", ylabel = "y_bins")
-        display(plt)
-        savefig("contour_plots/contour_100_constrained=$CONSTRAINT")
+        plt = contourf(x_axis, y_axis, z_grid', levels = 20, c = cgrad(:viridis, rev = true), legend = true, title = "contour", xlabel = "x", ylabel = "y")
+        # display(plt)
+        savefig("contour_plots/contour_$(bin_size)_constrained=$(CONSTRAINT)")
     end
 
     ## GAUSSIAN PROCESS FITTING ##
 
     # define hyperparameters
-    length_scale = 1.0
-    logObsNoise = log(1.0)
+    length_scale = 100
+    ll = [log(length_scale), log(length_scale)]
+    data_noise = 0.5
+    logObsNoise = log(data_noise)
     m = MeanZero()
-    kernel = SE(log(length_scale), 0.0)
+    kernel = SE(ll, logObsNoise)
+    # kernel = Matern(1/2, ll, logObsNoise)
 
     # initialize our observed x float64 matrix
     xy_obs = init_xy_obs(x_axis, y_axis)
+    println("xy_obs[:,1:5]: ", xy_obs[:,1:5])
 
     # reshape z_grid into float64 vector to pass as y_obs to GP
-    z_obs = reshape(z_grid, (:,))
-    if DEBUG println("size(z_obs): ", size(z_obs)) end
+    z_obs = reshape(z_grid', (:,))
+
+    if DEBUG
+        println("size(z_obs): ", size(z_obs))
+        println("z_grid[:,1:5]: ", z_grid[:, 1:5])
+        println("z_obs[1:15]: ", z_obs[1:15])
+    end
 
     # fit Gaussian Process
     gp = GP(xy_obs, z_obs, m, kernel, logObsNoise)
 
     # initialize our prediction design point matrix
-    xy_all = init_xy_all(x_range, y_range, num_x, num_y)
+    xy_all, x_pred, y_pred = init_xy_all(x_range, y_range, bin_size)
+
+    if DEBUG
+        println("xy_all[:,1:5]: ", xy_all[:,1:5])
+    end
 
     # extract predicted mean and confidence interval
     μ, σ² = predict_y(gp, xy_all)
     σ = sqrt.(σ²)
-    std95 = 1.96*σ
+    confid95 = 1.96*σ
+    
+    μ_grid = reshape(μ, (length(y_pred), length(x_pred)))
+
 
     if DEBUG
         println("size(xy_all): ", size(xy_all))
@@ -92,15 +109,25 @@ function main()
 
     # plot GP predict
     if DEBUG
-        println(xy_all[:,100:115])
-        println(μ[100:115])
-        println(σ[100:115])
+        println("xy_all[:,10:15]: ", xy_all[:, 10:15])
+        println("sum(μ): ", sum(μ))
+        println("μ[10:15]: ", μ[10:15])
+        println("σ[10:15]: ", σ[10:15])
     end
-    if PLOT_CONTOUR 
-        # TODO: fix this plotting of the predicted
-        plt = contourf(xy_all[1,:], xy_all[2,:], μ, levels =20, c = cgrad(:viridis, rev = true), legend = true, title = "contour", xlabel = "x_bins", ylabel = "y_bins")
-        display(plt)
-        savefig("contour_plots/predictedmean_$(bin_size)")
+    if PLOT_CONTOUR
+        plt = contour!(x_pred, y_pred, μ_grid, levels=20, c=cgrad(:cool, rev=true), legend=true, title="Prediction", xlabel="x", ylabel="y")
+        savefig("contour_plots/contour_predictedmean_$(bin_size)_constrained=$(CONSTRAINT)")
+
+        plt = contourf(x_pred, y_pred, μ_grid, levels=20, c=cgrad(:cool, rev=true), legend=true, title="Prediction", xlabel="x", ylabel="y")
+        savefig("contour_plots/predictedmean_$(bin_size)_constrained=$(CONSTRAINT)")
+
+        plt = surface(xy_all[1,:], xy_all[2,:], μ, title = "surface", xlabel = "x", ylabel = "y", label="predicted mean")
+        # surface!(xy_all[1, :], xy_all[2, :], μ - confid95, fillrange=μ + confid95, fillalpha=0.5,
+        #     label="95% confidence interval", legend=true)
+        # gui(plt)
+        # println("Look at the plot and then type something to move on")
+        # readline()
+        savefig("surface_plots/predictedmean_$(bin_size)_constrained=$(CONSTRAINT)")
     end
 
 
@@ -126,6 +153,11 @@ function find_data_origin_and_boundaries(data)
     long_min = minimum(data[:,"long"])
     long_max = maximum(data[:,"long"])
 
+    # create LLA descriptions
+    # origin_LLA = LLA(lat_max, long_min, 0.0)
+    # lower_left_LLA = LLA(lat_min, long_min, 0.0)
+    # upper_right_LLA = LLA(lat_max, long_max, 0.0)
+    
     # create LLA descriptions
     origin_LLA = LLA(lat_min, long_min, 0.0)
     lower_right_LLA = LLA(lat_min, long_max, 0.0)
@@ -187,7 +219,7 @@ end
     Returns:
         - (Matrix) squirrel counts in 2D binned grid space
 """
-function build_z_grid(data, origin_LLA, num_x_bins, num_y_bins, bin_size)
+function build_z_grid(data, origin_LLA, num_x_bins, num_y_bins, bin_size, x_range, y_range)
     
     z_grid = zeros(num_x_bins, num_y_bins)
 
@@ -205,10 +237,12 @@ function build_z_grid(data, origin_LLA, num_x_bins, num_y_bins, bin_size)
         if CONSTRAINT
             if row[constraint_type] #constrainted to constraint type
                 # increment count of squirrels within that bin
-                z_grid[floor(Int64, x)+1, floor(Int64, y)+1] += 1 
+                # z_grid[floor(Int64, y)+1, floor(Int64, x)+1] += 1
+                z_grid[floor(Int64, x)+1, floor(Int64, y)+1] += 1
             end
         else #no constraint 
             # increment count of squirrels within that bin
+            # z_grid[y_range - floor(Int64, y)+1, x_range - floor(Int64, x)+1] += 1
             z_grid[floor(Int64, x)+1, floor(Int64, y)+1] += 1
         end
     end
@@ -237,16 +271,19 @@ function init_xy_obs(x_axis, y_axis)
         for y in y_axis
             push!(xs, x)
             push!(ys, y)
+            # println("\nX: ", x)
+            # println("Y: ", y)
         end
     end
 
     # get into expected Vector structure for GP
-    xy_obs = append!(xs, ys)
-    xy_obs = reshape(xy_obs, (2,:)) 
+    xy_obs = vcat(xs', ys')
+
 
     if DEBUG
         println("\n~~ FITTING GP ~~")
         println("size(xy_obs):", size(xy_obs))
+        # println("xy_obs: ", xy_obs)
     end
     return xy_obs
 end
@@ -262,10 +299,10 @@ end
     Returns:
         - (Vector) Randomized x,y prediction points
 """
-function init_xy_all(x_range, y_range, num_x, num_y)
-    # we randomly sample num_x x values and num_y y values within our 2D z_grid
-    x_rand = rand(Uniform(0, x_range), num_x)
-    y_rand = rand(Uniform(0, y_range), num_y)
+function init_xy_all(x_range, y_range, bin_size)
+
+    x_rand = collect(0:0.5*bin_size:x_range)
+    y_rand = collect(0:0.5*bin_size:y_range)
 
     xs_all = Vector{Float64}(undef, 0)
     ys_all = Vector{Float64}(undef, 0)
@@ -285,7 +322,7 @@ function init_xy_all(x_range, y_range, num_x, num_y)
         println("typeof(xy_all): ", typeof(xy_all))
         println("size(xy_all): ", size(xy_all))
     end
-    return xy_all
+    return xy_all, x_rand, y_rand
 end
 
 
