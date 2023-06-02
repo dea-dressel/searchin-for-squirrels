@@ -64,11 +64,18 @@ function main()
     # define hyperparameters
     length_scale = 100
     ll = [log(length_scale), log(length_scale)]
-    data_noise = 0.5
+    data_noise = 0.2
     logObsNoise = log(data_noise)
     m = MeanZero()
-    kernel = SE(ll, logObsNoise)
-    # kernel = Matern(1/2, ll, logObsNoise)
+
+    kernel_type = "SE"
+    if kernel_type == "SE"
+        kernel = SE(ll, logObsNoise)
+    elseif kernel_type == "Matern"
+        kernel = Matern(1/2, ll, logObsNoise)
+    else
+        throw("ERROR: Unknown kernel type")
+    end
 
     # initialize our observed x float64 matrix
     xy_obs = init_xy_obs(x_axis, y_axis)
@@ -92,6 +99,8 @@ function main()
     if DEBUG
         println("xy_all[:,1:5]: ", xy_all[:,1:5])
     end
+
+    ### PREDICT ###
 
     # extract predicted mean and confidence interval
     μ, σ² = predict_y(gp, xy_all)
@@ -131,7 +140,20 @@ function main()
     end
 
 
-    ## IMPLEMENT EXPLORATION STRATEGY HERE ##
+    ## Find max of prediction ##
+    xy_best = xy_all[:,findmax(μ)[2]]
+
+    println("\n~~ OPTIMIZATION OUTPUT ~~")
+    println("Parameters: ")
+    println("   Bin Size: $(bin_size)")
+    println("   Characteristic Length Scales: $(ll)")
+    println("   Measurement Noise: $(data_noise)")
+    println("   Kernel: $(kernel_type)")
+    print("Constrained: $(CONSTRAINT)")
+    if CONSTRAINT
+        print(" , with constraint $(constraint_type)")
+    end
+    println("\nBest Location: $(xy_best)")
 
 end
 
