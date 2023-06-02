@@ -17,10 +17,11 @@ using GaussianProcesses, Plots, CSV, DataFrames, Geodesy, LinearAlgebra, Distrib
 const data_file = "nyc_squirrels.csv"
 
 # FLAGS FOR PRINTING AND PLOTTING
-const PLOT_CONTOUR = true
-const DEBUG = true
-const CONSTRAINT = false
-const constraint_type = "eating" #options include: "eating", "running", "climbing" 
+const PLOT = true
+const DEBUG = false
+const CONSTRAINT = true
+const CONSTRAINT_TYPE = "eating" #options include: "eating", "running", "climbing" 
+const KERNEL_TYPE = "SE" #"Matern" 
 
 const x_index = 1
 const y_index = 2
@@ -52,13 +53,6 @@ function main()
     # build grid to store lat/long squirrel counts (our z value)
     z_grid = build_z_grid(data, origin_LLA, num_x, num_y, bin_size, x_range, y_range)
 
-    # plotting
-    if PLOT_CONTOUR
-        plt = contourf(x_axis, y_axis, z_grid', levels = 20, c = cgrad(:viridis, rev = true), legend = true, title = "contour", xlabel = "x", ylabel = "y")
-        # display(plt)
-        savefig("contour_plots/contour_$(bin_size)_constrained=$(CONSTRAINT)")
-    end
-
     ## GAUSSIAN PROCESS FITTING ##
 
     # define hyperparameters
@@ -68,10 +62,10 @@ function main()
     logObsNoise = log(data_noise)
     m = MeanZero()
 
-    kernel_type = "SE"
-    if kernel_type == "SE"
+    # define kernel
+    if KERNEL_TYPE == "SE"
         kernel = SE(ll, logObsNoise)
-    elseif kernel_type == "Matern"
+    elseif KERNEL_TYPE == "Matern"
         kernel = Matern(1/2, ll, logObsNoise)
     else
         throw("ERROR: Unknown kernel type")
@@ -79,8 +73,7 @@ function main()
 
     # initialize our observed x float64 matrix
     xy_obs = init_xy_obs(x_axis, y_axis)
-    println("xy_obs[:,1:5]: ", xy_obs[:,1:5])
-
+    
     # reshape z_grid into float64 vector to pass as y_obs to GP
     z_obs = reshape(z_grid', (:,))
 
@@ -96,10 +89,6 @@ function main()
     # initialize our prediction design point matrix
     xy_all, x_pred, y_pred = init_xy_all(x_range, y_range, bin_size)
 
-    if DEBUG
-        println("xy_all[:,1:5]: ", xy_all[:,1:5])
-    end
-
     ### PREDICT ###
 
     # extract predicted mean and confidence interval
@@ -107,8 +96,6 @@ function main()
     σ = sqrt.(σ²)
     confid95 = 1.96*σ
     
-    μ_grid = reshape(μ, (length(y_pred), length(x_pred)))
-
 
     if DEBUG
         println("size(xy_all): ", size(xy_all))
@@ -116,44 +103,31 @@ function main()
         println("size(σ²): ", size(σ²))
     end
 
-    # plot GP predict
-    if DEBUG
-        println("xy_all[:,10:15]: ", xy_all[:, 10:15])
-        println("sum(μ): ", sum(μ))
-        println("μ[10:15]: ", μ[10:15])
-        println("σ[10:15]: ", σ[10:15])
-    end
-    if PLOT_CONTOUR
-        plt = contour!(x_pred, y_pred, μ_grid, levels=20, c=cgrad(:cool, rev=true), legend=true, title="Prediction", xlabel="x", ylabel="y")
-        savefig("contour_plots/contour_predictedmean_$(bin_size)_constrained=$(CONSTRAINT)")
-
-        plt = contourf(x_pred, y_pred, μ_grid, levels=20, c=cgrad(:cool, rev=true), legend=true, title="Prediction", xlabel="x", ylabel="y")
-        savefig("contour_plots/predictedmean_$(bin_size)_constrained=$(CONSTRAINT)")
-
-        plt = surface(xy_all[1,:], xy_all[2,:], μ, title = "surface", xlabel = "x", ylabel = "y", label="predicted mean")
-        # surface!(xy_all[1, :], xy_all[2, :], μ - confid95, fillrange=μ + confid95, fillalpha=0.5,
-        #     label="95% confidence interval", legend=true)
-        # gui(plt)
-        # println("Look at the plot and then type something to move on")
-        # readline()
-        savefig("surface_plots/predictedmean_$(bin_size)_constrained=$(CONSTRAINT)")
-    end
-
-
-    ## Find max of prediction ##
+    ## GAUSSIAN PROCESS OPTIMIZATION ##
     xy_best = xy_all[:,findmax(μ)[2]]
+
+    # NEEDS FIXING
+    #optimal_xy = LLAfromENU(upper_left_LLA, origin_LLA, wgs84)
+    
 
     println("\n~~ OPTIMIZATION OUTPUT ~~")
     println("Parameters: ")
     println("   Bin Size: $(bin_size)")
     println("   Characteristic Length Scales: $(ll)")
     println("   Measurement Noise: $(data_noise)")
-    println("   Kernel: $(kernel_type)")
+    println("   Kernel: $(KERNEL_TYPE)")
     print("Constrained: $(CONSTRAINT)")
     if CONSTRAINT
-        print(" , with constraint $(constraint_type)")
+        print(" , with constraint $(CONSTRAINT_TYPE)")
     end
     println("\nBest Location: $(xy_best)")
+    
+    
+    if PLOT
+        create_and_save_plots(x_axis, y_axis, z_grid, x_pred, y_pred, xy_all, μ, xy_best)
+    end
+
+
 
 end
 
@@ -174,11 +148,6 @@ function find_data_origin_and_boundaries(data)
     lat_max = maximum(data[:,"lat"])
     long_min = minimum(data[:,"long"])
     long_max = maximum(data[:,"long"])
-
-    # create LLA descriptions
-    # origin_LLA = LLA(lat_max, long_min, 0.0)
-    # lower_left_LLA = LLA(lat_min, long_min, 0.0)
-    # upper_right_LLA = LLA(lat_max, long_max, 0.0)
     
     # create LLA descriptions
     origin_LLA = LLA(lat_min, long_min, 0.0)
@@ -257,14 +226,12 @@ function build_z_grid(data, origin_LLA, num_x_bins, num_y_bins, bin_size, x_rang
         x,y = max(x,0), max(y,0) # ensure positive x,y values
         
         if CONSTRAINT
-            if row[constraint_type] #constrainted to constraint type
+            if row[CONSTRAINT_TYPE] #constrainted to constraint type
                 # increment count of squirrels within that bin
-                # z_grid[floor(Int64, y)+1, floor(Int64, x)+1] += 1
                 z_grid[floor(Int64, x)+1, floor(Int64, y)+1] += 1
             end
         else #no constraint 
             # increment count of squirrels within that bin
-            # z_grid[y_range - floor(Int64, y)+1, x_range - floor(Int64, x)+1] += 1
             z_grid[floor(Int64, x)+1, floor(Int64, y)+1] += 1
         end
     end
@@ -345,6 +312,100 @@ function init_xy_all(x_range, y_range, bin_size)
         println("size(xy_all): ", size(xy_all))
     end
     return xy_all, x_rand, y_rand
+end
+
+
+"""
+    Arguments:
+        - `x_axis`: (Vector) x values from 0 to x_range with bin_size increments
+        - `y_axis`: (Vector) y values from 0 to y_range with bin_size increments
+        - `z_grid`: (Matrix) squirrel counts in 2D binned grid space
+        - `x_pred`: (Vector) Randomized x prediction points
+        - `y_pred`: (Vector) Randomized y prediction points
+        - `xy_all`: (Vector) Randomized x,y prediction points
+        - `μ`:      (Vector) Predicted means
+"""
+function create_and_save_plots(x_axis, y_axis, z_grid, x_pred, y_pred, xy_all, μ, xy_best)
+    # Create plot of observed data
+    plt = contourf(x_axis, y_axis, z_grid', 
+                    levels = 20, 
+                    legend = true,
+                    c = cgrad(:davos, rev=true),  
+                    title = "\nObserved Squirrel Counts with Eating Constraint\n", xlabel = "x", ylabel = "y", 
+                    label="Observed Squirrel Counts", 
+                    titlefontsize=8,
+                    guidefontsize=8,
+                    tickfontsize=8,
+                    legendfontsize=8,
+                    aspectratio=:equal,
+                    xlim=(0,2700), ylim=(0,4000),
+                    dpi=100)
+
+    savefig("final_plots/observed_squirrel_counts_constrained=$(CONSTRAINT)")
+
+    # Overlay predicted mean contour lines
+    μ_grid = reshape(μ, (length(y_pred), length(x_pred)))
+
+    contour!(x_pred, y_pred, μ_grid, 
+            levels=20, 
+            c=cgrad(:sunset, rev=true), 
+            legend=true, 
+            title="Observed Squirrel Counts \n& GP Predicted Mean Contours", xlabel="x", ylabel="y",
+            label="GP Predicted Mean",
+            aspectratio=:equal,
+            titlefontsize=8,
+            guidefontsize=8,
+            tickfontsize=8,
+            legendfontsize=8,
+            xlim=(0,2700), ylim=(0,4000),
+            dpi=100)
+
+    savefig("final_plots/observed_and_predicted_mean_kernel=$(KERNEL_TYPE)_constrained=$(CONSTRAINT)")
+
+    # Overlay predicted mean contour lines
+    scatter!([xy_best[x_index]], [xy_best[y_index]],
+            title="Observed Squirrel Counts, \nGP Predicted Mean Contours & Optimal Location\n", xlabel="x", ylabel="y",
+            label="Optimal Location",
+            legend=:best,
+            markershape=:star5,
+            aspectratio=:equal,
+            titlefontsize=8,
+            guidefontsize=8,
+            tickfontsize=8,
+            legendfontsize=5,
+            xlim=(0,2700), ylim=(0,4000),
+            dpi=100)
+
+    savefig("final_plots/observed_and_predicted_mean_and_optimal_spot_kernel=$(KERNEL_TYPE)_constrained=$(CONSTRAINT)")
+
+    # Create predicted mean contour plot
+    plt = contourf(x_pred, y_pred, μ_grid, 
+                    levels=20, 
+                    c=cgrad(:sunset, rev=true), 
+                    title="\nGP Predicted Mean\n", xlabel="x", ylabel="y",
+                    titlefontsize=8,
+                    guidefontsize=8,
+                    tickfontsize=8,
+                    legendfontsize=5,
+                    aspectratio=:equal,
+                    xlim=(0,2700), ylim=(0,4000),
+                    dpi=100)
+
+    savefig("final_plots/predicted_mean_kernel=$(KERNEL_TYPE)_constrained=$(CONSTRAINT)")
+
+    # Create predict mean surface plot
+    plt = surface(xy_all[1,:], xy_all[2,:], μ, 
+                    title = "\nGP Predicted Mean w/ $(KERNEL_TYPE) Kernel\n", xlabel = "x", ylabel = "y", zlabel="Predicted Mean Squirrels",
+                    c=cgrad(:sunset, rev=true),
+                    titlefontsize=11,
+                    guidefontsize=8,
+                    tickfontsize=8,
+                    legendfontsize=8,
+                    xlim=(0,2700), ylim=(0,4000),
+                    dpi=100)
+
+    savefig("final_plots/predicted_mean_surface_kernel=$(KERNEL_TYPE)_constrained=$(CONSTRAINT)")
+
 end
 
 
